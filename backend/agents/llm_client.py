@@ -10,12 +10,14 @@ import os
 import time
 from typing import Optional
 
-# Current models that support generateContent for typical free-tier keys
+# Prefer free-tier-friendly Flash-Lite models first (higher RPM, less quota burn).
+# Heavier Flash/Pro models often return 429 with FreeTier limit 0 or exhausted quota.
 _GEMINI_MODELS = [
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
     "gemini-flash-latest",
     "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-pro-latest",
 ]
 _GEMINI_MODEL = _GEMINI_MODELS[0]
 
@@ -63,6 +65,20 @@ def complete(
     return _demo_complete(system_prompt, user_prompt)
 
 
+def _retry_seconds(err: Exception) -> float:
+    """Parse Gemini's retry_delay if present; otherwise a short backoff."""
+    import re
+    text = str(err)
+    # e.g. retry_delay { seconds: 29 }
+    m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+(?:\.\d+)?)", text)
+    if m:
+        return min(float(m.group(1)) + 1.0, 45.0)
+    m2 = re.search(r"Please retry in ([\d.]+)s", text, re.I)
+    if m2:
+        return min(float(m2.group(1)) + 1.0, 45.0)
+    return 8.0
+
+
 def _gemini_complete(
     system_prompt: str,
     user_prompt: str,
@@ -84,6 +100,8 @@ def _gemini_complete(
 
     models_to_try = [model] + [m for m in _GEMINI_MODELS if m != model]
     last_err: Exception | None = None
+    # Cap total wait so Vercel doesn't kill the request
+    quota_retries_left = 2
 
     base_config = {
         "max_output_tokens": max_tokens,
@@ -119,10 +137,32 @@ def _gemini_complete(
                     x in err_str.lower() for x in ("mime", "invalid", "unsupported", "400")
                 ):
                     continue
-                if any(
-                    x in err_str
-                    for x in ("503", "UNAVAILABLE", "404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED")
-                ):
+                if any(x in err_str for x in ("429", "RESOURCE_EXHAUSTED", "quota")):
+                    if quota_retries_left > 0:
+                        wait = _retry_seconds(e)
+                        time.sleep(wait)
+                        quota_retries_left -= 1
+                        # Retry same model once after waiting
+                        try:
+                            m = genai.GenerativeModel(
+                                model_name=attempt_model,
+                                generation_config=generation_config,
+                            )
+                            response = m.generate_content(full_prompt)
+                            text = getattr(response, "text", None) or ""
+                            if not text:
+                                try:
+                                    text = response.candidates[0].content.parts[0].text
+                                except Exception:
+                                    text = ""
+                            if text and str(text).strip():
+                                _last_model_used = attempt_model
+                                return str(text)
+                        except Exception as e2:
+                            last_err = e2
+                    # Try next model without waiting again
+                    break
+                if any(x in err_str for x in ("503", "UNAVAILABLE", "404", "NOT_FOUND")):
                     time.sleep(1)
                     break
                 time.sleep(0.5)

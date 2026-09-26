@@ -89,7 +89,7 @@ Directly impacted symbols: {dep_result.direct_impact_node_ids[:20]}
 Identify all significant risks introduced by this change.
 """
 
-    raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=8192)
+    raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=4096)
     from agents.json_utils import extract_json
     findings_data = extract_json(raw)
     if isinstance(findings_data, dict):

@@ -110,17 +110,18 @@ class Orchestrator:
         self._update_step('deps', 'Blast Radius Computation', 'complete',
                           dep_result.blast_radius_summary)
 
-        # ── Step 5: Parallel AI analysis (risk + tests + docs) ──────────────
+        # ── Step 5: Sequential AI analysis (risk → tests → docs) ─────────────
+        # Sequential + short gaps avoid free-tier 429s from 3 parallel Gemini calls.
         self._update_step('risk', 'Risk Analysis', 'running')
-        self._update_step('tests', 'Test Impact Analysis', 'running')
-        self._update_step('docs', 'Documentation Analysis', 'running')
+        self._update_step('tests', 'Test Impact Analysis', 'pending')
+        self._update_step('docs', 'Documentation Analysis', 'pending')
 
         relevant_code = self._gather_relevant_code(project_root, changed_files, scan_result)
         doc_context = self._gather_doc_context(scan_result)
         existing_test_sample = self._gather_test_sample(scan_result)
+        loop = asyncio.get_event_loop()
 
-        # Run three independent analyses in parallel
-        risk_task = asyncio.get_event_loop().run_in_executor(
+        risk_findings_raw = await loop.run_in_executor(
             None,
             partial(
                 analyze_risks,
@@ -129,9 +130,14 @@ class Orchestrator:
                 dep_result,
                 relevant_code,
                 doc_context,
-            )
+            ),
         )
-        test_task = asyncio.get_event_loop().run_in_executor(
+        self._update_step('risk', 'Risk Analysis', 'complete',
+                          f"{len(risk_findings_raw)} finding(s)")
+
+        await asyncio.sleep(1.5)
+        self._update_step('tests', 'Test Impact Analysis', 'running')
+        test_analysis = await loop.run_in_executor(
             None,
             partial(
                 analyze_tests,
@@ -140,34 +146,31 @@ class Orchestrator:
                 changed_symbols,
                 scan_result,
                 dep_result.affected_files,
-            )
+            ),
         )
-        doc_task = asyncio.get_event_loop().run_in_executor(
+        self._update_step('tests', 'Test Impact Analysis', 'complete',
+                          test_analysis.summary)
+
+        await asyncio.sleep(1.5)
+        self._update_step('docs', 'Documentation Analysis', 'running')
+        doc_insights = await loop.run_in_executor(
             None,
             partial(
                 analyze_documentation,
                 request.change_description,
                 scan_result,
-            )
+            ),
         )
-
-        risk_findings_raw, test_analysis, doc_insights = await asyncio.gather(
-            risk_task, test_task, doc_task
-        )
-
-        self._update_step('risk', 'Risk Analysis', 'complete',
-                          f"{len(risk_findings_raw)} finding(s)")
-        self._update_step('tests', 'Test Impact Analysis', 'complete',
-                          test_analysis.summary)
         self._update_step('docs', 'Documentation Analysis', 'complete',
                           f"{len(doc_insights)} insight(s)")
 
         # ── Step 6: Generate regression tests ───────────────────────────────
+        await asyncio.sleep(1.5)
         self._update_step('gen', 'Test Generation', 'running')
         changed_file_content = ''
         if changed_files:
             changed_file_content = get_file_content(project_root, changed_files[0]) or ''
-        generated_raw = await asyncio.get_event_loop().run_in_executor(
+        generated_raw = await loop.run_in_executor(
             None,
             partial(
                 generate_tests,
@@ -177,14 +180,14 @@ class Orchestrator:
                 test_analysis,
                 existing_test_sample,
                 changed_file_content,
-            )
+            ),
         )
         self._update_step('gen', 'Test Generation', 'complete',
                           f"Generated {generated_raw.file_name}")
 
         # ── Step 7: Verification ─────────────────────────────────────────────
         self._update_step('verify', 'Verification', 'running')
-        verification_raw = await asyncio.get_event_loop().run_in_executor(
+        verification_raw = await loop.run_in_executor(
             None, partial(verify, project_root)
         )
         status_label = 'passed' if verification_raw.passed else 'failed'
