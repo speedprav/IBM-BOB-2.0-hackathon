@@ -201,12 +201,12 @@ class Orchestrator:
         # Convert graph to API model
         api_graph = self._convert_graph(graph, dep_result)
 
-        # Convert risk findings
+        # Convert risk findings — sanitize AI-returned enum values before Pydantic validation
         risk_findings = [
             RiskFinding(
                 id=r.id,
-                severity=r.severity,
-                category=r.category,
+                severity=_coerce_severity(r.severity),
+                category=_coerce_category(r.category),
                 title=r.title,
                 description=r.description,
                 why_it_matters=r.why_it_matters,
@@ -363,3 +363,40 @@ def _map_edge_type(t: str) -> EdgeType:
     mapping = {'calls': EdgeType.CALLS, 'imports': EdgeType.IMPORTS,
                 'contains': EdgeType.REFERENCES, 'inherits': EdgeType.INHERITS}
     return mapping.get(t, EdgeType.REFERENCES)
+
+
+# ── Enum coercers ─────────────────────────────────────────────────────────────
+# Gemini sometimes returns multi-word or pipe-separated values like "race|data".
+# These helpers map any such string to the nearest valid enum value.
+
+_VALID_SEVERITIES = {"critical", "high", "medium", "low", "info"}
+_VALID_CATEGORIES = {
+    "regression", "api_contract", "security", "data",
+    "performance", "configuration", "maintainability",
+}
+
+def _coerce_severity(value: str) -> str:
+    v = str(value).lower().strip()
+    if v in _VALID_SEVERITIES:
+        return v
+    # Check if any valid severity appears as a substring
+    for s in ("critical", "high", "medium", "low", "info"):
+        if s in v:
+            return s
+    return "medium"
+
+
+def _coerce_category(value: str) -> str:
+    v = str(value).lower().strip()
+    if v in _VALID_CATEGORIES:
+        return v
+    # Handle pipe-separated values like "race|data" → pick first recognised token
+    for token in v.replace("|", " ").replace("/", " ").replace(",", " ").split():
+        if token in _VALID_CATEGORIES:
+            return token
+    # Fuzzy: check substrings
+    for cat in ("regression", "api_contract", "security", "data",
+                "performance", "configuration", "maintainability"):
+        if cat in v or cat.replace("_", "") in v.replace("_", ""):
+            return cat
+    return "regression"

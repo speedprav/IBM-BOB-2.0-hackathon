@@ -36,8 +36,8 @@ Your job is to identify concrete risks, NOT to summarize the change.
 
 Respond with a JSON array of risk findings. Each finding must have exactly these fields:
 {
-  "severity": "critical|high|medium|low|info",
-  "category": "regression|api_contract|security|data|performance|configuration|maintainability",
+  "severity": one of exactly: critical, high, medium, low, info  (single word only),
+  "category": one of exactly: regression, api_contract, security, data, performance, configuration, maintainability  (single word/value only — never combine with | or /),
   "title": "short title",
   "description": "what the risk is",
   "why_it_matters": "business/technical consequence if not addressed",
