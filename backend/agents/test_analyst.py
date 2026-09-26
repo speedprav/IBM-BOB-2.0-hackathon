@@ -109,7 +109,7 @@ Identify affected tests and coverage gaps.
 """
 
     try:
-        raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=1500)
+        raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=4096)
         from agents.json_utils import extract_json
         data = extract_json(raw)
         affected = [

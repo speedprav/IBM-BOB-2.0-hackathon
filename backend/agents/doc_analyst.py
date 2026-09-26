@@ -63,7 +63,7 @@ def analyze_documentation(
 Extract insights from these docs that are relevant to this change.
 """
     try:
-        raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=800)
+        raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=2048)
         from agents.json_utils import extract_json
         insights = extract_json(raw)
         if insights and isinstance(insights, list):

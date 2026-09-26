@@ -84,11 +84,18 @@ Directly impacted symbols: {dep_result.direct_impact_node_ids[:20]}
 Identify all significant risks introduced by this change.
 """
 
-    raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=2048)
+    raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=8192)
     from agents.json_utils import extract_json
     findings_data = extract_json(raw)
+    if isinstance(findings_data, dict):
+        findings_data = [findings_data]
+    if not isinstance(findings_data, list):
+        raise ValueError(f"Risk analyst expected a JSON array, got {type(findings_data).__name__}")
+
     findings = []
-    for i, fd in enumerate(findings_data):
+    for fd in findings_data:
+        if not isinstance(fd, dict):
+            continue
         findings.append(RiskFinding(
             id=str(uuid.uuid4()),
             severity=fd.get('severity', 'medium'),

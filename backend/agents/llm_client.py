@@ -56,21 +56,52 @@ def _gemini_complete(system_prompt: str, user_prompt: str, max_tokens: int, mode
 
     models_to_try = [model] + [m for m in _GEMINI_MODELS if m != model]
     last_err = None
+
     for attempt_model in models_to_try:
-        try:
-            m = genai.GenerativeModel(
-                model_name=attempt_model,
-                generation_config={"max_output_tokens": max_tokens},
-            )
-            response = m.generate_content(full_prompt)
-            return response.text
-        except Exception as e:
-            err_str = str(e)
-            if any(x in err_str for x in ("503", "UNAVAILABLE", "404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED")):
+        # Prefer JSON mime type when supported; fall back if the model rejects it
+        configs = [
+            {
+                "max_output_tokens": max_tokens,
+                "temperature": 0.2,
+                "response_mime_type": "application/json",
+            },
+            {
+                "max_output_tokens": max_tokens,
+                "temperature": 0.2,
+            },
+        ]
+        for generation_config in configs:
+            try:
+                m = genai.GenerativeModel(
+                    model_name=attempt_model,
+                    generation_config=generation_config,
+                )
+                response = m.generate_content(full_prompt)
+                text = getattr(response, "text", None)
+                if not text:
+                    try:
+                        text = response.candidates[0].content.parts[0].text
+                    except Exception:
+                        text = ""
+                if not text or not str(text).strip():
+                    raise RuntimeError(f"Empty response from {attempt_model}")
+                return str(text)
+            except Exception as e:
+                err_str = str(e)
                 last_err = e
-                time.sleep(1)
-                continue
-            raise
+                # MIME type unsupported → try next config for same model
+                if "response_mime_type" in generation_config and any(
+                    x in err_str.lower() for x in ("mime", "invalid", "unsupported", "400")
+                ):
+                    continue
+                # Missing / rate-limited model → try next model
+                if any(x in err_str for x in ("503", "UNAVAILABLE", "404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED")):
+                    time.sleep(1)
+                    break
+                # Other errors → try next model
+                time.sleep(0.5)
+                break
+
     raise last_err  # type: ignore
 
 
