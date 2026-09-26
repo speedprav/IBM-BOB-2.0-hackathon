@@ -9,12 +9,12 @@ pre-computed realistic results for the Demo Orders scenario.
 from __future__ import annotations
 import os
 
-# Model names for google-generativeai SDK
+# Model names for google-generativeai SDK (1.5 / 2.0 families are shut down)
 _GEMINI_MODELS = [
-    "gemini-2.0-flash",        # modern fast model
-    "gemini-1.5-flash",        # standard
-    "gemini-1.5-flash-latest", # fallback
-    "gemini-1.5-pro",          # fallback
+    "gemini-flash-latest",  # stable alias → current flash
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-pro-latest",
 ]
 _GEMINI_MODEL = _GEMINI_MODELS[0]
 
