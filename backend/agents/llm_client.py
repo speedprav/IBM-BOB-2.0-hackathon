@@ -42,8 +42,12 @@ def complete(
 
 # ── Gemini implementation (google-genai SDK) ──────────────────────────────────
 def _gemini_complete(system_prompt: str, user_prompt: str, max_tokens: int, model: str) -> str:
-    from google import genai
-    from google.genai import types
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        # google-genai not installed — fall back to demo mode
+        return _demo_complete(system_prompt, user_prompt)
     import time
     key = os.environ["GEMINI_API_KEY"].strip()
     client = genai.Client(api_key=key)
