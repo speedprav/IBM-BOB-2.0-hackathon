@@ -7,7 +7,8 @@
     "backend": {
       "root": "backend",
       "runtime": "python",
-      "entrypoint": "index.py"
+      "entrypoint": "index.py",
+      "installCommand": "pip install -r requirements.txt"
     }
   },
   "rewrites": [
