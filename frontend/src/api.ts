@@ -4,8 +4,9 @@ import {
   AnalysisStatusResponse,
 } from './types/api';
 
-// In production (Vercel), VITE_API_URL points to the Render backend.
+// In Vercel multi-service mode, /api is proxied by Vercel to the backend service.
 // In local dev, Vite proxy forwards /api → localhost:8000.
+// VITE_API_URL can override for standalone Render/other deployments.
 const BASE = (import.meta.env.VITE_API_URL ?? '') + '/api';
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
