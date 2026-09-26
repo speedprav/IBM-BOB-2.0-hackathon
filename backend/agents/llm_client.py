@@ -35,12 +35,8 @@ def complete(
     Falls back to realistic demo responses if no key or if Gemini call fails.
     """
     if _has_key():
-        try:
-            return _gemini_complete(system_prompt, user_prompt, max_tokens, model)
-        except Exception:
-            # If Gemini fails (rate limit, invalid key, model deprecation, network),
-            # fall back gracefully to pre-computed demo results
-            return _demo_complete(system_prompt, user_prompt)
+        # Do not catch exceptions here; let them bubble up so the user knows if rate limited or invalid key
+        return _gemini_complete(system_prompt, user_prompt, max_tokens, model)
     else:
         return _demo_complete(system_prompt, user_prompt)
 
