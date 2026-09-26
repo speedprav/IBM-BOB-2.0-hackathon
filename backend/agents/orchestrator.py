@@ -36,6 +36,13 @@ def _resolve_project_root(project_path: str) -> str:
     candidate = os.path.normpath(os.path.join(base, project_path))
     if os.path.isdir(candidate):
         return candidate
+    # Vercel: try relative to /vercel/path0 (repo root on Vercel)
+    vercel_root = "/vercel/path0"
+    if os.path.isdir(vercel_root):
+        candidate2 = os.path.normpath(os.path.join(vercel_root, project_path))
+        if os.path.isdir(candidate2):
+            return candidate2
+    # Return as-is — scanner will handle missing dir gracefully
     return project_path
 
 

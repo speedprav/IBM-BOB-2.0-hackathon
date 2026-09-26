@@ -16,6 +16,30 @@ router = APIRouter()
 # In-memory job store (sufficient for prototype)
 _jobs: Dict[str, AnalysisStatusResponse] = {}
 
+# Embed the demo diff inline so it works on Vercel serverless (no filesystem access)
+_DEMO_DIFF = """\
+--- a/services/order_service.py
++++ b/services/order_service.py
+@@ -44,8 +44,10 @@ class OrderService:
+ 
+     def update_order(self, user: User, order_id: str, request: UpdateOrderRequest) -> Order:
+         order = self._repo.get(order_id)
+ 
+         if not can_modify_order(user, order):
+             raise PermissionError("You do not have permission to modify this order")
+ 
+-        if not order.can_be_updated():
+-            raise OrderValidationError(
+-                f"Order in status '{order.status.value}' cannot be updated"
+-            )
++        # Allow updates on both pending and confirmed orders to support
++        # last-minute item corrections before shipping
++        if order.status not in (OrderStatus.PENDING, OrderStatus.CONFIRMED):
++            raise OrderValidationError(
++                f"Order in status '{order.status.value}' cannot be updated"
++            )
+"""
+
 
 def _is_demo_mode() -> bool:
     import os
@@ -46,16 +70,17 @@ def get_demo_change(project_id: str):
     if project_id != "demo_orders":
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Try reading from filesystem first (local dev), fall back to embedded (Vercel)
     import os
-    diff_path = os.path.join(
+    diff_text = _DEMO_DIFF
+    diff_path = os.path.normpath(os.path.join(
         os.path.dirname(__file__), "..", "..", "sample_project", "demo_change.diff"
-    )
-    diff_path = os.path.normpath(diff_path)
+    ))
     try:
         with open(diff_path) as f:
             diff_text = f.read()
-    except FileNotFoundError:
-        diff_text = ""
+    except (FileNotFoundError, OSError):
+        pass  # use embedded _DEMO_DIFF
 
     return {
         "project_id": project_id,

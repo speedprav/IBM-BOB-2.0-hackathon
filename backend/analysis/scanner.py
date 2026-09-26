@@ -58,6 +58,11 @@ def scan_repository(project_root: str) -> ScanResult:
     """Recursively scan a project directory and return all source files."""
     result = ScanResult(project_root=project_root)
 
+    if not os.path.isdir(project_root):
+        # Project directory not found (e.g. Vercel serverless) — return empty result
+        # The orchestrator will use demo/AI mode with the diff text only
+        return result
+
     for dirpath, dirnames, filenames in os.walk(project_root):
         # Prune ignored directories in place
         dirnames[:] = [d for d in dirnames if d not in IGNORE_DIRS]
