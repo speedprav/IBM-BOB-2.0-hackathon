@@ -27,22 +27,31 @@ export default function AnalysisPage({ appState, onReset }: Props) {
 
   const startAnalysis = useCallback(async () => {
     try {
-      const { analysis_id } = await api.startAnalysis({
-        project_path: appState.projectPath,
-        change_description: appState.changeDescription,
-        diff_text: appState.diffText || undefined,
-        changed_files: appState.changedFiles.length > 0 ? appState.changedFiles : undefined,
-      });
-
-      const finalResult = await api.pollUntilComplete(
-        analysis_id,
-        (s) => setStatus(s),
-        1500
+      // Stream on one connection — required on Vercel (in-memory poll jobs 404 across instances)
+      const finalResult = await api.streamAnalysis(
+        {
+          project_path: appState.projectPath,
+          change_description: appState.changeDescription,
+          diff_text: appState.diffText || undefined,
+          changed_files: appState.changedFiles.length > 0 ? appState.changedFiles : undefined,
+        },
+        (s) => setStatus(s)
       );
       setResult(finalResult);
       setStatus(prev => prev ? { ...prev, status: 'complete', result: finalResult } : null);
     } catch (err: any) {
-      setError(err?.message || 'Analysis failed');
+      const message = err?.message || 'Analysis failed';
+      setError(message);
+      setStatus(prev =>
+        prev
+          ? { ...prev, status: 'failed', error: message }
+          : {
+              analysis_id: '',
+              status: 'failed',
+              progress_steps: [],
+              error: message,
+            }
+      );
     }
   }, [appState]);
 

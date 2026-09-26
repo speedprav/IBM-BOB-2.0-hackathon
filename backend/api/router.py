@@ -5,15 +5,16 @@ import asyncio
 import uuid
 from typing import Dict
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 
 from models.analysis import (
-    AnalysisRequest, AnalysisStatusResponse, AnalysisStatus, AnalysisResult
+    AnalysisRequest, AnalysisStatusResponse, AnalysisStatus
 )
 
 router = APIRouter()
 
-# In-memory job store (sufficient for prototype)
+# In-memory job store (local dev). On Vercel, prefer /analyze/stream — polling
+# across separate serverless instances will 404 because memory is not shared.
 _jobs: Dict[str, AnalysisStatusResponse] = {}
 
 # Embed the demo diff inline so it works on Vercel serverless (no filesystem access)
@@ -44,6 +45,11 @@ _DEMO_DIFF = """\
 def _is_demo_mode() -> bool:
     import os
     return not bool(os.environ.get("GEMINI_API_KEY", "").strip())
+
+
+def _job_payload(job: AnalysisStatusResponse) -> str:
+    """Serialize job status for SSE / JSON responses."""
+    return job.model_dump_json()
 
 
 @router.get("/projects")
@@ -92,7 +98,11 @@ def get_demo_change(project_id: str):
 
 @router.post("/analyze")
 async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundTasks):
-    """Start an analysis job and return an ID for polling."""
+    """
+    Start an analysis job and return an ID for polling.
+    Prefer POST /analyze/stream on serverless (Vercel) — in-memory jobs are
+    not shared across instances, so polling often returns 404.
+    """
     analysis_id = str(uuid.uuid4())
     job = AnalysisStatusResponse(
         analysis_id=analysis_id,
@@ -104,9 +114,53 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
     return {"analysis_id": analysis_id}
 
 
+@router.post("/analyze/stream")
+async def stream_analysis(request: AnalysisRequest):
+    """
+    Run analysis on this request and stream progress as Server-Sent Events.
+    Keeps the whole job on one serverless instance — required for Vercel.
+    """
+    analysis_id = str(uuid.uuid4())
+    job = AnalysisStatusResponse(
+        analysis_id=analysis_id,
+        status=AnalysisStatus.PENDING,
+        progress_steps=[],
+    )
+    _jobs[analysis_id] = job
+
+    async def event_generator():
+        task = asyncio.create_task(_run_analysis(analysis_id, request))
+        try:
+            # Immediate ack so the UI can show the pipeline
+            yield f"data: {_job_payload(job)}\n\n"
+            while not task.done():
+                await asyncio.sleep(0.75)
+                yield f"data: {_job_payload(job)}\n\n"
+            # Propagate analysis errors into the job (already set in _run_analysis)
+            try:
+                await task
+            except Exception:
+                pass
+            yield f"data: {_job_payload(job)}\n\n"
+        except Exception as exc:
+            job.status = AnalysisStatus.FAILED
+            job.error = str(exc)
+            yield f"data: {_job_payload(job)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/analyze/{analysis_id}", response_model=AnalysisStatusResponse)
 def get_analysis_status(analysis_id: str):
-    """Poll analysis job status."""
+    """Poll analysis job status (local/dev only — unreliable on multi-instance serverless)."""
     job = _jobs.get(analysis_id)
     if not job:
         raise HTTPException(status_code=404, detail="Analysis not found")
@@ -114,7 +168,7 @@ def get_analysis_status(analysis_id: str):
 
 
 async def _run_analysis(analysis_id: str, request: AnalysisRequest):
-    """Background task: runs the full agentic workflow."""
+    """Background / streamed task: runs the full agentic workflow."""
     from agents.orchestrator import Orchestrator
     job = _jobs[analysis_id]
     job.status = AnalysisStatus.RUNNING
