@@ -1,5 +1,5 @@
 """
-LLM client — uses Google Gemini free tier (google-genai SDK).
+LLM client — uses Google Gemini free tier via google-generativeai SDK.
 Get a free API key at: https://aistudio.google.com/app/apikey
 Set environment variable: GEMINI_API_KEY=your_key_here
 
@@ -9,12 +9,11 @@ pre-computed realistic results for the Demo Orders scenario.
 from __future__ import annotations
 import os
 
-# Model fallback list — tries each in order if 503/429/404 occurs
+# Model names for google-generativeai SDK
 _GEMINI_MODELS = [
-    "gemini-flash-lite-latest",    # cheapest, free tier
-    "gemini-3.1-flash-lite",       # fallback
-    "gemini-3-flash-preview",      # fallback
-    "gemini-3.8-flash",            # may be rate-limited
+    "gemini-1.5-flash",        # cheapest, free tier
+    "gemini-1.5-flash-latest", # fallback
+    "gemini-1.5-pro",          # fallback
 ]
 _GEMINI_MODEL = _GEMINI_MODELS[0]
 
@@ -40,29 +39,27 @@ def complete(
         return _demo_complete(system_prompt, user_prompt)
 
 
-# ── Gemini implementation (google-genai SDK) ──────────────────────────────────
+# ── Gemini implementation (google-generativeai SDK) ───────────────────────────
 def _gemini_complete(system_prompt: str, user_prompt: str, max_tokens: int, model: str) -> str:
     try:
-        from google import genai
-        from google.genai import types
+        import google.generativeai as genai
     except ImportError:
-        # google-genai not installed — fall back to demo mode
         return _demo_complete(system_prompt, user_prompt)
+
     import time
     key = os.environ["GEMINI_API_KEY"].strip()
-    client = genai.Client(api_key=key)
+    genai.configure(api_key=key)
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
-    # Try primary model, fall back to alternates on 503/404
     models_to_try = [model] + [m for m in _GEMINI_MODELS if m != model]
     last_err = None
     for attempt_model in models_to_try:
         try:
-            response = client.models.generate_content(
-                model=attempt_model,
-                contents=full_prompt,
-                config=types.GenerateContentConfig(max_output_tokens=max_tokens),
+            m = genai.GenerativeModel(
+                model_name=attempt_model,
+                generation_config={"max_output_tokens": max_tokens},
             )
+            response = m.generate_content(full_prompt)
             return response.text
         except Exception as e:
             err_str = str(e)
@@ -220,20 +217,15 @@ class TestConfirmedOrderUpdateRegression:
         assert updated.total == pytest.approx(49.99)
 
     def test_admin_cannot_apply_retroactive_discount_to_confirmed_order(self):
-        """
-        SECURITY RISK: Admin applying a discount to a confirmed order.
-        After the change this is now possible — this test documents the risk.
-        This test WILL PASS (demonstrating the vulnerability exists).
-        """
+        """SECURITY RISK: Admin applying a discount to a confirmed order."""
         svc, repo = make_service()
         order = svc.create_order(customer(), items())
         original_total = order.total
         order.status = OrderStatus.CONFIRMED
         repo.save(order)
-        # Admin can now apply a discount retroactively — this is the security risk
         updated = svc.update_order(admin(), order.id, UpdateOrderRequest(discount_percent=50.0))
         assert updated.discount_percent == 50.0
-        assert updated.total < original_total  # price was changed post-confirmation
+        assert updated.total < original_total
 
     def test_customer_still_cannot_update_other_users_confirmed_order(self):
         """Auth guard should still prevent cross-customer updates."""

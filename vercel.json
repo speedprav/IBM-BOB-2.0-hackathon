@@ -7,9 +7,7 @@
     "backend": {
       "root": "backend",
       "runtime": "python",
-      "entrypoint": "index.py",
-      "installCommand": "pip install -r requirements.txt",
-      "buildCommand": "pip install google-genai==1.10.0"
+      "entrypoint": "index.py"
     }
   },
   "rewrites": [
