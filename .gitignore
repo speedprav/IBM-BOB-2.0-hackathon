@@ -35,5 +35,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Vercel local link / pull artifacts
 .vercel
-.env*
+.env.local
+.env*.local
+!.env.example
+!.env.*.example
