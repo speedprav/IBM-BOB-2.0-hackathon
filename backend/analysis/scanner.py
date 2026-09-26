@@ -54,14 +54,53 @@ class ScanResult:
         return sum(f.lines for f in self.files)
 
 
+def _scan_embedded(project_root: str) -> ScanResult:
+    """Return ScannedFile list from embedded sample project data."""
+    result = ScanResult(project_root=project_root)
+    try:
+        from analysis.embedded_sample import EMBEDDED_SAMPLE_FILES
+    except ImportError:
+        return result
+
+    for rel_path, content in EMBEDDED_SAMPLE_FILES.items():
+        filename = os.path.basename(rel_path)
+        ext = os.path.splitext(filename)[1].lower()
+        lower_name = filename.lower()
+
+        # Documentation files
+        if lower_name in ('readme.md', 'readme.rst', 'readme.txt') or \
+           rel_path.startswith('docs/') or rel_path.startswith('doc/'):
+            result.doc_files.append(rel_path)
+            continue
+
+        # Source files
+        if ext not in SUPPORTED_EXTENSIONS:
+            continue
+
+        scanned = ScannedFile(
+            path=rel_path,
+            abs_path=os.path.join(project_root, rel_path).replace('\\', '/'),
+            language=SUPPORTED_EXTENSIONS[ext],
+            size_bytes=len(content.encode('utf-8')),
+            lines=content.count('\n') + 1,
+            content=content,
+        )
+        result.files.append(scanned)
+
+        if _is_test_file(rel_path, filename):
+            result.test_files.append(rel_path)
+
+    return result
+
+
 def scan_repository(project_root: str) -> ScanResult:
     """Recursively scan a project directory and return all source files."""
-    result = ScanResult(project_root=project_root)
-
     if not os.path.isdir(project_root):
-        # Project directory not found (e.g. Vercel serverless) — return empty result
-        # The orchestrator will use demo/AI mode with the diff text only
-        return result
+        # Physical project directory not found (e.g. Vercel / Render serverless)
+        # Use embedded files for demo projects
+        return _scan_embedded(project_root)
+
+    result = ScanResult(project_root=project_root)
 
     for dirpath, dirnames, filenames in os.walk(project_root):
         # Prune ignored directories in place
@@ -109,6 +148,11 @@ def scan_repository(project_root: str) -> ScanResult:
             if _is_test_file(rel_path, filename):
                 result.test_files.append(rel_path)
 
+    if result.file_count == 0:
+        embedded = _scan_embedded(project_root)
+        if embedded.file_count > 0:
+            return embedded
+
     return result
 
 
@@ -132,6 +176,14 @@ def _read_file(abs_path: str) -> str:
 
 def get_file_content(project_root: str, rel_path: str) -> Optional[str]:
     """Read a single file relative to project_root."""
+    rel_clean = rel_path.replace('\\', '/').lstrip('/')
+    if not os.path.isdir(project_root):
+        try:
+            from analysis.embedded_sample import EMBEDDED_SAMPLE_FILES
+            return EMBEDDED_SAMPLE_FILES.get(rel_clean)
+        except ImportError:
+            return None
+
     abs_path = os.path.normpath(os.path.join(project_root, rel_path))
     # Security: ensure the resolved path stays inside project_root
     if not abs_path.startswith(os.path.normpath(project_root)):
@@ -139,4 +191,9 @@ def get_file_content(project_root: str, rel_path: str) -> Optional[str]:
     try:
         return _read_file(abs_path)
     except OSError:
-        return None
+        try:
+            from analysis.embedded_sample import EMBEDDED_SAMPLE_FILES
+            return EMBEDDED_SAMPLE_FILES.get(rel_clean)
+        except ImportError:
+            return None
+

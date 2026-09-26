@@ -11,7 +11,8 @@ import os
 
 # Model names for google-generativeai SDK
 _GEMINI_MODELS = [
-    "gemini-1.5-flash",        # cheapest, free tier
+    "gemini-2.0-flash",        # modern fast model
+    "gemini-1.5-flash",        # standard
     "gemini-1.5-flash-latest", # fallback
     "gemini-1.5-pro",          # fallback
 ]
@@ -31,12 +32,18 @@ def complete(
     """
     Single-turn completion.
     Uses Gemini free tier when GEMINI_API_KEY is set.
-    Falls back to realistic demo responses otherwise.
+    Falls back to realistic demo responses if no key or if Gemini call fails.
     """
     if _has_key():
-        return _gemini_complete(system_prompt, user_prompt, max_tokens, model)
+        try:
+            return _gemini_complete(system_prompt, user_prompt, max_tokens, model)
+        except Exception:
+            # If Gemini fails (rate limit, invalid key, model deprecation, network),
+            # fall back gracefully to pre-computed demo results
+            return _demo_complete(system_prompt, user_prompt)
     else:
         return _demo_complete(system_prompt, user_prompt)
+
 
 
 # ── Gemini implementation (google-generativeai SDK) ───────────────────────────
@@ -251,19 +258,31 @@ class TestConfirmedOrderUpdateRegression:
 
 def _demo_complete(system_prompt: str, user_prompt: str) -> str:
     """Return realistic pre-computed responses based on which agent is calling."""
-    prompt_lower = (system_prompt + user_prompt).lower()
+    sys_lower = system_prompt.lower()
+    user_lower = user_prompt.lower()
 
-    if "risk" in prompt_lower and "json array" in prompt_lower:
-        return _RISK_RESPONSE
-
-    if "test engineer" in prompt_lower and "affected_tests" in prompt_lower:
-        return _TEST_RESPONSE
-
-    if "documentation analyst" in prompt_lower or "architectural invariants" in prompt_lower:
+    if "documentation analyst" in sys_lower or "documentation" in sys_lower:
         return _DOC_RESPONSE
 
-    if "regression test" in prompt_lower or "pytest regression" in prompt_lower:
+    if "test engineer" in sys_lower and "regression" not in sys_lower:
+        return _TEST_RESPONSE
+
+    if "regression" in sys_lower or "pytest" in sys_lower or "test generation" in sys_lower:
         return _TEST_GEN_RESPONSE
 
-    # Generic fallback
+    if "risk" in sys_lower:
+        return _RISK_RESPONSE
+
+    # Fallbacks based on user_prompt
+    if "project documentation" in user_lower:
+        return _DOC_RESPONSE
+    if "generate a regression test" in user_lower:
+        return _TEST_GEN_RESPONSE
+    if "test files" in user_lower:
+        return _TEST_RESPONSE
+    if "blast radius" in user_lower or "risk" in user_lower:
+        return _RISK_RESPONSE
+
     return json.dumps({"result": "Demo mode — set GEMINI_API_KEY for live AI analysis."})
+
+

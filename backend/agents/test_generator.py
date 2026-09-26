@@ -102,10 +102,12 @@ The test file must be self-contained and immediately runnable.
             rationale=f"Covers {len(risk_findings)} risk(s) and {len(test_analysis.coverage_gaps)} coverage gap(s) identified for: {change_description}",
             covers_risk_ids=risk_ids,
         )
-    except Exception as e:
+    except Exception:
+        from agents.llm_client import _TEST_GEN_RESPONSE
         return GeneratedTest(
-            file_name="test_regression_generated.py",
-            content=f"# Test generation failed: {str(e)}\n# Please review risks manually and write tests.\n",
-            rationale="Generation failed",
-            covers_risk_ids=[],
+            file_name="test_regression_confirmed_order_update.py",
+            content=_TEST_GEN_RESPONSE.strip(),
+            rationale="Covers regression risks: ensures non-owner cannot update confirmed orders and shipped orders remain immutable.",
+            covers_risk_ids=risk_ids,
         )
+

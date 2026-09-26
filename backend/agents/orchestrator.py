@@ -28,22 +28,28 @@ from agents.verifier import verify
 
 
 def _resolve_project_root(project_path: str) -> str:
-    """Resolve project path relative to the devtwin project root."""
+    """Resolve project path relative to the devtwin project root or backend root."""
     if os.path.isabs(project_path) and os.path.isdir(project_path):
         return project_path
-    # Try relative to this file's location (devtwin/backend/agents/ → devtwin/)
+    # Try relative to repo root (devtwin/backend/agents/ → devtwin/)
     base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     candidate = os.path.normpath(os.path.join(base, project_path))
     if os.path.isdir(candidate):
         return candidate
+    # Try relative to backend dir (devtwin/backend/agents/ → devtwin/backend/)
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate_backend = os.path.normpath(os.path.join(backend_dir, project_path))
+    if os.path.isdir(candidate_backend):
+        return candidate_backend
     # Vercel: try relative to /vercel/path0 (repo root on Vercel)
     vercel_root = "/vercel/path0"
     if os.path.isdir(vercel_root):
         candidate2 = os.path.normpath(os.path.join(vercel_root, project_path))
         if os.path.isdir(candidate2):
             return candidate2
-    # Return as-is — scanner will handle missing dir gracefully
+    # Return as-is — scanner and verifier will use embedded fallback gracefully
     return project_path
+
 
 
 class Orchestrator:

@@ -1,0 +1,20 @@
+--- a/services/order_service.py
++++ b/services/order_service.py
+@@ -44,8 +44,10 @@ class OrderService:
+ 
+     def update_order(self, user: User, order_id: str, request: UpdateOrderRequest) -> Order:
+         order = self._repo.get(order_id)
+ 
+         if not can_modify_order(user, order):
+             raise PermissionError("You do not have permission to modify this order")
+ 
+-        if not order.can_be_updated():
+-            raise OrderValidationError(
+-                f"Order in status '{order.status.value}' cannot be updated"
+-            )
++        # Allow updates on both pending and confirmed orders to support
++        # last-minute item corrections before shipping
++        if order.status not in (OrderStatus.PENDING, OrderStatus.CONFIRMED):
++            raise OrderValidationError(
++                f"Order in status '{order.status.value}' cannot be updated"
++            )
