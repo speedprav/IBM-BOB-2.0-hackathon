@@ -4,7 +4,9 @@ import {
   AnalysisStatusResponse,
 } from './types/api';
 
-const BASE = '/api';
+// In production (Vercel), VITE_API_URL points to the Render backend.
+// In local dev, Vite proxy forwards /api → localhost:8000.
+const BASE = (import.meta.env.VITE_API_URL ?? '') + '/api';
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
