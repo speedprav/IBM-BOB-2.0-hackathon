@@ -180,3 +180,7 @@ class AnalysisResult(BaseModel):
     documentation_insights: List[str]
     progress_steps: List[ProgressStep]
     metrics: ProductivityMetrics
+
+    # Provenance — so the UI can prove results are live vs demo
+    analysis_source: str = "unknown"  # "live_gemini" | "demo"
+    ai_model: Optional[str] = None

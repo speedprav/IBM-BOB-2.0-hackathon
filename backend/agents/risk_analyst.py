@@ -38,14 +38,19 @@ Respond with a JSON array of risk findings. Each finding must have exactly these
 {
   "severity": one of exactly: critical, high, medium, low, info  (single word only),
   "category": one of exactly: regression, api_contract, security, data, performance, configuration, maintainability  (single word/value only — never combine with | or /),
-  "title": "short title",
+  "title": "short title unique to this change",
   "description": "what the risk is",
   "why_it_matters": "business/technical consequence if not addressed",
   "affected_location": "file:function or module name",
-  "evidence": "specific line/behavior from the diff or source that causes this risk",
+  "evidence": "quote or paraphrase a SPECIFIC line/behavior from the provided diff or source",
   "suggested_mitigation": "concrete action to address it"
 }
 
+Rules:
+- Base EVERY finding on the provided diff/code/docs — no generic template risks.
+- Prefer 3–6 specific findings over vague ones.
+- If the change description differs from the diff, analyze the DIFF as ground truth and note mismatches.
+- Do not reuse stock titles like "Payment and Inventory Inconsistencies" unless the code truly shows that.
 Focus on NON-OBVIOUS consequences. Do not list the change itself as a risk.
 Return ONLY the JSON array, no other text.
 """

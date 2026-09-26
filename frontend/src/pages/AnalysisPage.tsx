@@ -90,6 +90,14 @@ export default function AnalysisPage({ appState, onReset }: Props) {
               </div>
             </div>
             <div className="flex items-center gap-8">
+              {result?.analysis_source === 'live_gemini' && (
+                <span className="badge" style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--success)', border: '1px solid rgba(34,197,94,0.35)' }}>
+                  Live Gemini{result.ai_model ? ` · ${result.ai_model}` : ''}
+                </span>
+              )}
+              {result?.analysis_source === 'demo' && (
+                <span className="badge badge-muted">Demo mode (canned)</span>
+              )}
               <div className={`dot dot-${status?.status || 'pending'}`} />
               <span className="text-small text-muted">
                 {isRunning ? 'Analyzing…' : isComplete ? 'Analysis complete' : isFailed ? 'Failed' : 'Pending'}

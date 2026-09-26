@@ -120,6 +120,8 @@ export interface AnalysisResult {
   documentation_insights: string[];
   progress_steps: ProgressStep[];
   metrics: ProductivityMetrics;
+  analysis_source?: 'live_gemini' | 'demo' | string;
+  ai_model?: string;
 }
 
 export interface AnalysisStatusResponse {

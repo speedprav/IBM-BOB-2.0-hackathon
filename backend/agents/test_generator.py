@@ -1,6 +1,6 @@
 """
-Test Generator — generates focused regression tests based on risk findings
-and coverage gaps. Uses AI to write tests that match project conventions.
+Test Generator — writes regression tests from live risk/gap analysis.
+No silent canned test file when live mode is on.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -32,6 +32,7 @@ Requirements:
 - The test file should be named test_regression_<short_description>.py
 
 Return ONLY the Python test file content. No explanation, no markdown fences.
+Do not emit a generic placeholder — write tests that match THIS change and THESE risks.
 """
 
 
@@ -61,10 +62,10 @@ def generate_tests(
 ```
 
 ## Risk Findings
-{risk_summary}
+{risk_summary or '(none)'}
 
 ## Coverage Gaps
-{gap_summary}
+{gap_summary or '(none)'}
 
 ## Existing Test Style (reference)
 ```python
@@ -80,34 +81,35 @@ Generate a regression test file that tests the risky behaviors exposed by this c
 The test file must be self-contained and immediately runnable.
 """
 
-    try:
-        content = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=2500)
-        # Strip markdown fences if Gemini wraps the code
-        import re
-        fence_match = re.search(r'```(?:python)?\s*\n([\s\S]*?)```', content)
-        if fence_match:
-            content = fence_match.group(1).strip()
-        elif content.startswith('```'):
-            lines = content.split('\n')
-            content = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
+    content = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=4096, json_mode=False)
+    import re
+    fence_match = re.search(r'```(?:python)?\s*\n([\s\S]*?)```', content)
+    if fence_match:
+        content = fence_match.group(1).strip()
+    elif content.startswith('```'):
+        lines = content.split('\n')
+        content = '\n'.join(lines[1:-1] if lines[-1].strip() == '```' else lines[1:])
 
-        # Determine file name from change description
-        slug = change_description.lower().replace(' ', '_')[:40]
-        slug = ''.join(c if c.isalnum() or c == '_' else '' for c in slug)
-        file_name = f"test_regression_{slug}.py"
+    stripped = content.strip()
+    if stripped.startswith('{') and ('"content"' in stripped or '"code"' in stripped):
+        try:
+            from agents.json_utils import extract_json
+            obj = extract_json(stripped)
+            if isinstance(obj, dict):
+                content = obj.get('content') or obj.get('code') or content
+        except Exception:
+            pass
 
-        return GeneratedTest(
-            file_name=file_name,
-            content=content,
-            rationale=f"Covers {len(risk_findings)} risk(s) and {len(test_analysis.coverage_gaps)} coverage gap(s) identified for: {change_description}",
-            covers_risk_ids=risk_ids,
-        )
-    except Exception:
-        from agents.llm_client import _TEST_GEN_RESPONSE
-        return GeneratedTest(
-            file_name="test_regression_confirmed_order_update.py",
-            content=_TEST_GEN_RESPONSE.strip(),
-            rationale="Covers regression risks: ensures non-owner cannot update confirmed orders and shipped orders remain immutable.",
-            covers_risk_ids=risk_ids,
-        )
+    slug = change_description.lower().replace(' ', '_')[:40]
+    slug = ''.join(c if c.isalnum() or c == '_' else '' for c in slug) or 'change'
+    file_name = f"test_regression_{slug}.py"
 
+    return GeneratedTest(
+        file_name=file_name,
+        content=content,
+        rationale=(
+            f"Live-generated regression suite covering {len(risk_findings)} risk(s) "
+            f"and {len(test_analysis.coverage_gaps)} gap(s) for: {change_description}"
+        ),
+        covers_risk_ids=risk_ids,
+    )

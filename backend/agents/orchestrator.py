@@ -287,6 +287,14 @@ class Orchestrator:
             measured_duration_seconds=round(duration_seconds, 1),
         )
 
+        from agents.llm_client import last_analysis_mode, last_model_used
+        source = last_analysis_mode()
+        model = last_model_used()
+        if source == "live_gemini":
+            summary = f"[Live Gemini · {model or 'unknown model'}] {summary}"
+        else:
+            summary = f"[Demo mode — set GEMINI_API_KEY for live AI] {summary}"
+
         return AnalysisResult(
             analysis_id=self.analysis_id,
             project_path=request.project_path,
@@ -302,6 +310,8 @@ class Orchestrator:
             documentation_insights=doc_insights,
             progress_steps=self.job.progress_steps,
             metrics=metrics,
+            analysis_source=source,
+            ai_model=model,
         )
 
     def _convert_graph(self, graph, dep_result) -> DependencyGraph:

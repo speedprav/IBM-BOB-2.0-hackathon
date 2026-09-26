@@ -1,10 +1,8 @@
 """
-Documentation Analyst — reads README and architecture docs to extract
-project constraints and context relevant to the proposed change.
-Uses AI to understand documentation.
+Documentation Analyst — extracts project constraints relevant to the change.
+Live Gemini only when an API key is set; no silent canned fallbacks.
 """
 from __future__ import annotations
-import os
 from typing import List
 from agents.llm_client import complete
 from analysis.scanner import ScanResult
@@ -23,7 +21,11 @@ Focus on:
 
 Return a JSON array of concise insight strings. Each insight should be one sentence.
 Return ONLY the JSON array, no other text.
-Example: ["Orders can only be modified by their owner or an admin.", "Status transitions must follow the defined lifecycle."]
+
+Rules:
+- Quote or paraphrase ONLY what appears in the provided docs.
+- Tie each insight to the proposed change when possible.
+- Do not invent policies that are not in the documentation.
 """
 
 
@@ -35,15 +37,12 @@ def analyze_documentation(
 
     doc_texts = []
 
-    # Read explicitly discovered doc files (README, docs/)
     from analysis.scanner import get_file_content
     for doc_path in scan_result.doc_files:
         content = get_file_content(scan_result.project_root, doc_path)
         if content:
             doc_texts.append(f"### {doc_path}\n{content}")
 
-
-    # Also check source files that look like docs
     for scanned in scan_result.files:
         lower = scanned.path.lower()
         if 'readme' in lower or 'architecture' in lower:
@@ -62,20 +61,11 @@ def analyze_documentation(
 
 Extract insights from these docs that are relevant to this change.
 """
-    try:
-        raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=2048)
-        from agents.json_utils import extract_json
-        insights = extract_json(raw)
-        if insights and isinstance(insights, list):
-            return [str(i) for i in insights[:10]]
-    except Exception:
-        pass
-
-    try:
-        from agents.llm_client import _DOC_RESPONSE
-        from agents.json_utils import extract_json
-        demo_insights = extract_json(_DOC_RESPONSE)
-        return [str(i) for i in demo_insights[:10]]
-    except Exception:
-        return ["Key invariant: Only PENDING orders can be updated by customers (models.py)."]
-
+    raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=2048)
+    from agents.json_utils import extract_json
+    insights = extract_json(raw)
+    if insights and isinstance(insights, list):
+        return [str(i) for i in insights[:10]]
+    if isinstance(insights, dict) and "insights" in insights:
+        return [str(i) for i in insights["insights"][:10]]
+    raise ValueError("Documentation analyst expected a JSON array of insight strings")

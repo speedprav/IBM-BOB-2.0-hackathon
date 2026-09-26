@@ -1,75 +1,100 @@
 """
-LLM client — uses Google Gemini free tier via google-generativeai SDK.
-Get a free API key at: https://aistudio.google.com/app/apikey
-Set environment variable: GEMINI_API_KEY=your_key_here
+LLM client — Google Gemini via google-generativeai SDK.
 
-If no key is set, the client falls back to DEMO MODE which returns
-pre-computed realistic results for the Demo Orders scenario.
+Live mode (GEMINI_API_KEY set): ALWAYS calls Gemini. Never substitutes canned text.
+Demo mode (no key): returns pre-computed Demo Orders responses for offline demos only.
 """
 from __future__ import annotations
+import json
 import os
+import time
+from typing import Optional
 
-# Model names for google-generativeai SDK (1.5 / 2.0 families are shut down)
+# Current models that support generateContent for typical free-tier keys
 _GEMINI_MODELS = [
-    "gemini-flash-latest",  # stable alias → current flash
+    "gemini-flash-latest",
     "gemini-3.5-flash",
     "gemini-3.6-flash",
     "gemini-pro-latest",
 ]
 _GEMINI_MODEL = _GEMINI_MODELS[0]
 
-# ── Demo-mode flag ────────────────────────────────────────────────────────────
+# Populated after each successful live call — used in the analysis report
+_last_model_used: Optional[str] = None
+_last_mode: str = "unknown"  # "live_gemini" | "demo"
+
+
 def _has_key() -> bool:
     return bool(os.environ.get("GEMINI_API_KEY", "").strip())
+
+
+def is_live_mode() -> bool:
+    return _has_key()
+
+
+def last_model_used() -> Optional[str]:
+    return _last_model_used
+
+
+def last_analysis_mode() -> str:
+    return _last_mode
 
 
 def complete(
     system_prompt: str,
     user_prompt: str,
-    max_tokens: int = 2048,
+    max_tokens: int = 4096,
     model: str = _GEMINI_MODEL,
+    json_mode: bool = True,
 ) -> str:
     """
     Single-turn completion.
-    Uses Gemini free tier when GEMINI_API_KEY is set.
-    Falls back to realistic demo responses if no key or if Gemini call fails.
+    With GEMINI_API_KEY: live Gemini only (errors bubble up — no silent demo swap).
+    Without key: demo canned responses.
+    json_mode=True asks Gemini for JSON (agents that parse JSON).
+    json_mode=False is for free-form output (e.g. generated Python tests).
     """
+    global _last_mode
     if _has_key():
-        # Do not catch exceptions here; let them bubble up so the user knows if rate limited or invalid key
-        return _gemini_complete(system_prompt, user_prompt, max_tokens, model)
-    else:
-        return _demo_complete(system_prompt, user_prompt)
+        _last_mode = "live_gemini"
+        return _gemini_complete(system_prompt, user_prompt, max_tokens, model, json_mode)
+
+    _last_mode = "demo"
+    return _demo_complete(system_prompt, user_prompt)
 
 
-
-# ── Gemini implementation (google-generativeai SDK) ───────────────────────────
-def _gemini_complete(system_prompt: str, user_prompt: str, max_tokens: int, model: str) -> str:
+def _gemini_complete(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+    model: str,
+    json_mode: bool = True,
+) -> str:
+    global _last_model_used
     try:
         import google.generativeai as genai
-    except ImportError:
-        return _demo_complete(system_prompt, user_prompt)
+    except ImportError as e:
+        raise RuntimeError(
+            "google-generativeai is not installed — cannot run live AI analysis."
+        ) from e
 
-    import time
     key = os.environ["GEMINI_API_KEY"].strip()
     genai.configure(api_key=key)
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
     models_to_try = [model] + [m for m in _GEMINI_MODELS if m != model]
-    last_err = None
+    last_err: Exception | None = None
+
+    base_config = {
+        "max_output_tokens": max_tokens,
+        "temperature": 0.7,
+    }
+    configs = []
+    if json_mode:
+        configs.append({**base_config, "response_mime_type": "application/json"})
+    configs.append(dict(base_config))
 
     for attempt_model in models_to_try:
-        # Prefer JSON mime type when supported; fall back if the model rejects it
-        configs = [
-            {
-                "max_output_tokens": max_tokens,
-                "temperature": 0.2,
-                "response_mime_type": "application/json",
-            },
-            {
-                "max_output_tokens": max_tokens,
-                "temperature": 0.2,
-            },
-        ]
         for generation_config in configs:
             try:
                 m = genai.GenerativeModel(
@@ -85,28 +110,30 @@ def _gemini_complete(system_prompt: str, user_prompt: str, max_tokens: int, mode
                         text = ""
                 if not text or not str(text).strip():
                     raise RuntimeError(f"Empty response from {attempt_model}")
+                _last_model_used = attempt_model
                 return str(text)
             except Exception as e:
                 err_str = str(e)
                 last_err = e
-                # MIME type unsupported → try next config for same model
                 if "response_mime_type" in generation_config and any(
                     x in err_str.lower() for x in ("mime", "invalid", "unsupported", "400")
                 ):
                     continue
-                # Missing / rate-limited model → try next model
-                if any(x in err_str for x in ("503", "UNAVAILABLE", "404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED")):
+                if any(
+                    x in err_str
+                    for x in ("503", "UNAVAILABLE", "404", "NOT_FOUND", "429", "RESOURCE_EXHAUSTED")
+                ):
                     time.sleep(1)
                     break
-                # Other errors → try next model
                 time.sleep(0.5)
                 break
 
-    raise last_err  # type: ignore
+    raise RuntimeError(
+        f"Live Gemini analysis failed after trying {models_to_try}: {last_err}"
+    ) from last_err
 
 
-# ── Demo fallback — realistic pre-computed results ───────────────────────────
-import json
+# ── Demo-only canned responses (used ONLY when GEMINI_API_KEY is unset) ───────
 
 _RISK_RESPONSE = json.dumps([
     {
@@ -117,38 +144,8 @@ _RISK_RESPONSE = json.dumps([
         "why_it_matters": "A failing test signals that the contract between the service layer and the rest of the system has changed. Merging with a broken test masks the regression.",
         "affected_location": "tests/test_orders.py:TestUpdateOrder.test_cannot_update_confirmed_order",
         "evidence": "Old code: `if not order.can_be_updated()` → raises on CONFIRMED. New code: allows PENDING and CONFIRMED, silently expanding the update window.",
-        "suggested_mitigation": "Update or remove the test after explicitly deciding whether confirmed-order updates are intentional, and communicate the contract change to API consumers."
+        "suggested_mitigation": "Update or remove the test after explicitly deciding whether confirmed-order updates are intentional, and communicate the contract change to API consumers.",
     },
-    {
-        "severity": "high",
-        "category": "api_contract",
-        "title": "PATCH /orders/<id> now accepts confirmed orders — undocumented API contract change",
-        "description": "External callers currently expect PATCH to return 422 for confirmed orders. This change silently alters that behavior without a version bump.",
-        "why_it_matters": "API consumers (mobile apps, partner integrations) may depend on the 422 response to show 'order locked' UI. Silent behavior change can cause data corruption on the client side.",
-        "affected_location": "api/routes.py:update_order",
-        "evidence": "routes.py delegates entirely to order_service.update_order. The status check was the only guard; it is now relaxed without a changelogs entry.",
-        "suggested_mitigation": "Add a CHANGELOG entry, bump the API minor version, and document the new accepted statuses in the API spec."
-    },
-    {
-        "severity": "critical",
-        "category": "security",
-        "title": "Discount manipulation window extended to confirmed orders",
-        "description": "Admins can apply discounts during update. By allowing confirmed-order updates, a malicious or mistaken admin can apply a retroactive discount after the customer has already accepted the confirmed price.",
-        "why_it_matters": "Financial integrity risk: an order can be discounted after confirmation, bypassing the pricing approval workflow that only applies at creation/pending stage.",
-        "affected_location": "services/order_service.py:update_order + auth.py:can_apply_discount",
-        "evidence": "`can_apply_discount` returns True for ADMIN unconditionally. The status gate was the only control preventing post-confirmation discount injection.",
-        "suggested_mitigation": "Add an explicit guard: disallow discount changes on orders that are not in PENDING status, separate from the general update permission."
-    },
-    {
-        "severity": "medium",
-        "category": "data",
-        "title": "Order items can be replaced after warehouse has committed inventory",
-        "description": "Confirmed orders typically mean the warehouse has reserved or picked items. Allowing item replacement at CONFIRMED status can create inventory inconsistencies.",
-        "why_it_matters": "Inventory reservations made at confirmation time will be orphaned if items are swapped post-confirmation.",
-        "affected_location": "services/order_service.py:update_order (items replacement branch)",
-        "evidence": "No inventory integration exists in this codebase, but the architecture doc states confirmed orders should be treated as warehouse-committed.",
-        "suggested_mitigation": "If item updates on confirmed orders are required, add an inventory release/re-reserve step or restrict updates to notes-only for confirmed orders."
-    }
 ])
 
 _TEST_RESPONSE = json.dumps({
@@ -158,149 +155,40 @@ _TEST_RESPONSE = json.dumps({
             "test_name": "TestUpdateOrder.test_cannot_update_confirmed_order",
             "relevance": "directly_affected",
             "will_break": True,
-            "reason": "This test explicitly asserts that updating a CONFIRMED order raises OrderValidationError. The change removes that guard, so the assertion will fail."
-        },
-        {
-            "test_file": "tests/test_orders.py",
-            "test_name": "TestUpdateOrder.test_customer_can_update_own_pending_order",
-            "relevance": "related",
-            "will_break": False,
-            "reason": "Still tests PENDING update path which is unchanged, but should be reviewed alongside the new CONFIRMED path."
-        },
-        {
-            "test_file": "tests/test_orders.py",
-            "test_name": "TestUpdateOrder.test_admin_can_apply_discount",
-            "relevance": "related",
-            "will_break": False,
-            "reason": "Discount logic is unchanged but now reachable on CONFIRMED orders — a new risk scenario not covered by this test."
+            "reason": "This test explicitly asserts that updating a CONFIRMED order raises OrderValidationError.",
         }
     ],
     "coverage_gaps": [
         "No test covers updating an order in CONFIRMED status (the new allowed path)",
-        "No test verifies a customer cannot apply a discount to a confirmed order",
-        "No test checks that item replacement on a confirmed order updates the total correctly",
-        "No test verifies the API returns the correct HTTP status for confirmed-order updates",
-        "No regression test for admin applying a retroactive discount to a confirmed order"
-    ]
+    ],
 })
 
 _DOC_RESPONSE = json.dumps([
     "The architecture doc states: only PENDING orders can be updated (item/notes changes).",
-    "Status transitions must follow the defined lifecycle: PENDING → CONFIRMED → SHIPPED → DELIVERED.",
-    "Once shipped, no modifications or cancellations are allowed.",
-    "Only admins can apply discounts — discount is applied at update time and persists on the order.",
-    "Customers can only modify their own orders; admins and support can modify any order."
 ])
 
 _TEST_GEN_RESPONSE = '''\
-"""
-Regression tests for: Allow customers to update orders in CONFIRMED status.
-
-These tests cover the risk scenarios identified by DevTwin analysis:
-- API contract change for confirmed-order updates
-- Discount manipulation on confirmed orders
-- Existing broken test documentation
-"""
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-
+"""Demo-mode placeholder test — set GEMINI_API_KEY for live generation."""
 import pytest
-from models import User, UserRole, OrderItem, OrderStatus, UpdateOrderRequest
-from services.order_service import OrderService, OrderValidationError
-from auth import PermissionError
-from repositories.order_repository import OrderRepository
 
-
-def make_service():
-    repo = OrderRepository()
-    return OrderService(repo), repo
-
-
-def customer(uid="u1"):
-    return User(id=uid, email=f"{uid}@example.com", role=UserRole.CUSTOMER)
-
-
-def admin():
-    return User(id="admin1", email="admin@example.com", role=UserRole.ADMIN)
-
-
-def items():
-    return [OrderItem("p1", "Widget", 2, 9.99)]
-
-
-class TestConfirmedOrderUpdateRegression:
-    """Regression suite for the confirmed-order update change."""
-
-    def test_confirmed_order_can_now_be_updated_notes(self):
-        """After the change: updating notes on a confirmed order should succeed."""
-        svc, repo = make_service()
-        order = svc.create_order(customer(), items())
-        order.status = OrderStatus.CONFIRMED
-        repo.save(order)
-        updated = svc.update_order(customer(), order.id, UpdateOrderRequest(notes="urgent"))
-        assert updated.notes == "urgent"
-
-    def test_confirmed_order_item_replacement(self):
-        """After the change: item replacement on a confirmed order should reflect in total."""
-        svc, repo = make_service()
-        order = svc.create_order(customer(), items())
-        order.status = OrderStatus.CONFIRMED
-        repo.save(order)
-        new_items = [OrderItem("p2", "Gadget", 1, 49.99)]
-        updated = svc.update_order(customer(), order.id, UpdateOrderRequest(items=new_items))
-        assert updated.total == pytest.approx(49.99)
-
-    def test_admin_cannot_apply_retroactive_discount_to_confirmed_order(self):
-        """SECURITY RISK: Admin applying a discount to a confirmed order."""
-        svc, repo = make_service()
-        order = svc.create_order(customer(), items())
-        original_total = order.total
-        order.status = OrderStatus.CONFIRMED
-        repo.save(order)
-        updated = svc.update_order(admin(), order.id, UpdateOrderRequest(discount_percent=50.0))
-        assert updated.discount_percent == 50.0
-        assert updated.total < original_total
-
-    def test_customer_still_cannot_update_other_users_confirmed_order(self):
-        """Auth guard should still prevent cross-customer updates."""
-        svc, repo = make_service()
-        owner = customer("owner")
-        stranger = customer("stranger")
-        order = svc.create_order(owner, items())
-        order.status = OrderStatus.CONFIRMED
-        repo.save(order)
-        with pytest.raises(PermissionError):
-            svc.update_order(stranger, order.id, UpdateOrderRequest(notes="hack"))
-
-    def test_shipped_order_still_cannot_be_updated(self):
-        """The change should not affect SHIPPED orders — they must remain immutable."""
-        svc, repo = make_service()
-        order = svc.create_order(customer(), items())
-        order.status = OrderStatus.SHIPPED
-        repo.save(order)
-        with pytest.raises(OrderValidationError):
-            svc.update_order(customer(), order.id, UpdateOrderRequest(notes="too late"))
+def test_demo_placeholder():
+    assert True
 '''
 
 
 def _demo_complete(system_prompt: str, user_prompt: str) -> str:
-    """Return realistic pre-computed responses based on which agent is calling."""
+    """Canned responses — only when no API key is configured."""
     sys_lower = system_prompt.lower()
     user_lower = user_prompt.lower()
 
     if "documentation analyst" in sys_lower or "documentation" in sys_lower:
         return _DOC_RESPONSE
-
     if "test engineer" in sys_lower and "regression" not in sys_lower:
         return _TEST_RESPONSE
-
     if "regression" in sys_lower or "pytest" in sys_lower or "test generation" in sys_lower:
         return _TEST_GEN_RESPONSE
-
     if "risk" in sys_lower:
         return _RISK_RESPONSE
-
-    # Fallbacks based on user_prompt
     if "project documentation" in user_lower:
         return _DOC_RESPONSE
     if "generate a regression test" in user_lower:
@@ -311,5 +199,3 @@ def _demo_complete(system_prompt: str, user_prompt: str) -> str:
         return _RISK_RESPONSE
 
     return json.dumps({"result": "Demo mode — set GEMINI_API_KEY for live AI analysis."})
-
-

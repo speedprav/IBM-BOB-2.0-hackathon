@@ -1,10 +1,10 @@
 """
 Test Analyst — identifies affected tests, coverage gaps, and test opportunities.
-Uses deterministic analysis + AI for semantic gap detection.
+Uses deterministic analysis + live AI for semantic gap detection.
+Never silently substitutes canned demo findings when live mode is on.
 """
 from __future__ import annotations
-import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List
 from agents.llm_client import complete
 from analysis.scanner import ScanResult
@@ -45,15 +45,19 @@ Return a JSON object with exactly:
       "test_name": "TestClass.test_method_name",
       "relevance": "directly_affected|related|monitoring",
       "will_break": true/false,
-      "reason": "why this test is affected"
+      "reason": "why this test is affected — cite the assertion or behavior from the test"
     }
   ],
   "coverage_gaps": [
-    "description of a missing test case"
+    "description of a missing test case specific to THIS change"
   ]
 }
 
-Be precise. A test 'will_break' if the change modifies behavior it explicitly tests.
+Rules:
+- Base answers ONLY on the provided diff, symbols, and test contents.
+- A test 'will_break' only if the change modifies behavior it explicitly asserts.
+- Do NOT invent generic findings unrelated to this diff.
+- Vary your wording; do not reuse stock demo phrases.
 Return ONLY valid JSON, no other text.
 """
 
@@ -67,7 +71,6 @@ def analyze_tests(
 ) -> TestAnalysisResult:
     """Identify affected tests and coverage gaps using AI reasoning."""
 
-    # Collect test file contents
     test_contents = {}
     for f in scan_result.files:
         if f.path in scan_result.test_files:
@@ -81,7 +84,6 @@ def analyze_tests(
             summary="No test files detected",
         )
 
-    # Build compact test summary for prompt
     test_summary = []
     for path, content in test_contents.items():
         symbols = extract_symbols(path, content)
@@ -105,66 +107,40 @@ def analyze_tests(
 ## Test File Contents (first 2 files)
 {_format_test_files(test_contents, limit=2)}
 
-Identify affected tests and coverage gaps.
+Identify affected tests and coverage gaps for THIS specific change only.
 """
 
-    try:
-        raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=4096)
-        from agents.json_utils import extract_json
-        data = extract_json(raw)
-        affected = [
-            TestImpactResult(
-                test_file=t.get('test_file', ''),
-                test_name=t.get('test_name', ''),
-                relevance=t.get('relevance', 'related'),
-                will_break=bool(t.get('will_break', False)),
-                reason=t.get('reason', ''),
-            )
-            for t in data.get('affected_tests', [])
-        ]
-        gaps = data.get('coverage_gaps', [])
-        breaking = sum(1 for t in affected if t.will_break)
-        summary = (
-            f"Found {len(affected)} affected test(s), {breaking} will break. "
-            f"{len(gaps)} coverage gap(s) identified."
-        )
-        return TestAnalysisResult(
-            affected_tests=affected,
-            coverage_gaps=gaps,
-            test_files_found=list(test_contents.keys()),
-            summary=summary,
-        )
-    except Exception:
-        from agents.llm_client import _TEST_RESPONSE
-        from agents.json_utils import extract_json
-        try:
-            data = extract_json(_TEST_RESPONSE)
-            affected = [
-                TestImpactResult(
-                    test_file=t.get('test_file', ''),
-                    test_name=t.get('test_name', ''),
-                    relevance=t.get('relevance', 'related'),
-                    will_break=bool(t.get('will_break', False)),
-                    reason=t.get('reason', ''),
-                )
-                for t in data.get('affected_tests', [])
-            ]
-            gaps = data.get('coverage_gaps', [])
-            breaking = sum(1 for t in affected if t.will_break)
-            return TestAnalysisResult(
-                affected_tests=affected,
-                coverage_gaps=gaps,
-                test_files_found=list(test_contents.keys()) or ["tests/test_orders.py", "tests/test_auth.py"],
-                summary=data.get('summary', f"Found {len(affected)} affected test(s), {breaking} will break."),
-            )
-        except Exception:
-            return TestAnalysisResult(
-                affected_tests=[],
-                coverage_gaps=["Test analysis completed with standard coverage review."],
-                test_files_found=list(test_contents.keys()),
-                summary="Test analysis completed",
-            )
+    raw = complete(_SYSTEM_PROMPT, user_prompt, max_tokens=4096)
+    from agents.json_utils import extract_json
+    data = extract_json(raw)
+    if isinstance(data, list):
+        data = {"affected_tests": data, "coverage_gaps": []}
+    if not isinstance(data, dict):
+        raise ValueError("Test analyst expected a JSON object")
 
+    affected = [
+        TestImpactResult(
+            test_file=t.get('test_file', ''),
+            test_name=t.get('test_name', ''),
+            relevance=t.get('relevance', 'related'),
+            will_break=bool(t.get('will_break', False)),
+            reason=t.get('reason', ''),
+        )
+        for t in data.get('affected_tests', [])
+        if isinstance(t, dict)
+    ]
+    gaps = [str(g) for g in data.get('coverage_gaps', [])]
+    breaking = sum(1 for t in affected if t.will_break)
+    summary = (
+        f"Found {len(affected)} affected test(s), {breaking} will break. "
+        f"{len(gaps)} coverage gap(s) identified."
+    )
+    return TestAnalysisResult(
+        affected_tests=affected,
+        coverage_gaps=gaps,
+        test_files_found=list(test_contents.keys()),
+        summary=summary,
+    )
 
 
 def _format_test_files(test_contents: dict, limit: int) -> str:

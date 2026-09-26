@@ -72,22 +72,25 @@ def verify(
     """
     Run the project test suite and return structured results.
     Uses only allowlisted commands. No user input reaches subprocess.
+
+    On serverless (no project directory / no pytest), returns an honest
+    'skipped' result instead of fabricated pass output.
     """
     command = ["python", "-m", "pytest", "tests/", "-v", "--tb=short"]
     command_str = ' '.join(command)
 
-    # In serverless environments (Vercel, Render) or virtual projects without physical directory,
-    # return the pre-computed verified test results for the sample project.
     if not os.path.isdir(project_root):
         return VerificationResult(
             command=command_str,
-            status='passed',
-            duration_ms=82,
-            output=_DEMO_VERIFICATION_OUTPUT,
-            passed=True,
+            status='skipped',
+            duration_ms=0,
+            output=(
+                "Verification skipped: project directory is not available in this "
+                "runtime (serverless). Risk/test analysis above is still from live AI."
+            ),
+            passed=False,
         )
 
-    # Ensure the command is in our allowlist
     if command not in ALLOWED_COMMANDS:
         return VerificationResult(
             command=command_str,
@@ -105,27 +108,28 @@ def verify(
             capture_output=True,
             text=True,
             timeout=60,
-            # Never use shell=True
         )
         duration_ms = int((time.perf_counter() - start) * 1000)
         output = (result.stdout + result.stderr)[:MAX_OUTPUT_CHARS]
 
-        passed = result.returncode == 0
-        status = 'passed' if passed else 'failed'
-
-        # If pytest wasn't installed or command not found in the environment, use demo output
-        if result.returncode != 0 and ("No module named pytest" in output or "pytest: not found" in output):
+        if result.returncode != 0 and (
+            "No module named pytest" in output or "pytest: not found" in output
+        ):
             return VerificationResult(
                 command=command_str,
-                status='passed',
-                duration_ms=82,
-                output=_DEMO_VERIFICATION_OUTPUT,
-                passed=True,
+                status='skipped',
+                duration_ms=duration_ms,
+                output=(
+                    "Verification skipped: pytest is not installed in this runtime.\n"
+                    + output
+                ),
+                passed=False,
             )
 
+        passed = result.returncode == 0
         return VerificationResult(
             command=command_str,
-            status=status,
+            status='passed' if passed else 'failed',
             duration_ms=duration_ms,
             output=output,
             passed=passed,
@@ -140,21 +144,12 @@ def verify(
             passed=False,
         )
     except Exception as e:
-        # Fall back gracefully in restricted serverless environments
-        if "sample_project" in project_root or "demo_orders" in project_root:
-            return VerificationResult(
-                command=command_str,
-                status='passed',
-                duration_ms=82,
-                output=_DEMO_VERIFICATION_OUTPUT,
-                passed=True,
-            )
         duration_ms = int((time.perf_counter() - start) * 1000)
         return VerificationResult(
             command=command_str,
-            status='error',
+            status='skipped',
             duration_ms=duration_ms,
-            output=f"Verification error: {str(e)}",
+            output=f"Verification skipped in this runtime: {e}",
             passed=False,
         )
 
